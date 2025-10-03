@@ -1,48 +1,51 @@
 # -*- coding: utf-8 -*-
 """
-HexoDash - 220x230 像素版（定点布局）
-- 文章/草稿/页面：三行输入，标签与输入框基线对齐
-- 组合命令：clean/generate/deploy/server（顺序与互斥）
-- 互斥：勾选“运行预览”→“上传仓库”变灰；勾选“上传仓库”→“运行预览”变灰
-- 尾部参数仅追加在最后一条命令；“i”按钮弹出说明
-- server/安装：实时终端窗口（可 Ctrl+C 或点叉结束）；退出后弹结果窗
-- 安装流程：npm install hexo-cli -g && hexo init blog && cd blog && npm install
-- Windows 无黑框；仅移除“最大化”按钮，保留最小化与关闭
-- PyInstaller 资源路径与 Hexo.ico
-变量命名：PascalCase
+HexoDash - 220x230 1.0.0-rc.1
+一个用于Hexo博客的GUI命令助手，
+通过GUI页面快速完成新建文章、运行生成、部署和预览等常用操作。
+免去开终端输入命令的麻烦。
+
+附带尾部参数大全表。
+2025.10.03 19:29:03
 """
 
-import os, sys, platform, threading, subprocess, signal, tempfile, shutil
+import os, sys, threading, subprocess, signal, tempfile, shutil
 import tkinter as Tk
 from tkinter import messagebox, scrolledtext
 from tkinter import font as tkfont
 
-# =============== 可调常量（像素 / 字体） ===============
-WinW, WinH       = 220, 230                     # 固定窗口尺寸
-FontMain         = ("Microsoft YaHei UI", 11)   # 标签与输入框统一字体
-EntryWidthPx     = 92                           # 右侧输入框宽度（像素）
-EntryHeightPx    = 22                           # 右侧输入框高度（像素）
-EntryYOffset     = 2                            # 输入框相对其行Y的细微竖向微调（对齐利器）
+# =============== 可调常量（布局的像素/字体调整） ===============
+WinW, WinH       = 220, 230                     # 主窗口尺寸
+FontMain         = ("Microsoft YaHei UI", 11)   # 标签、输入框字体
+EntryWidthPx     = 92
+EntryHeightPx    = 22
+EntryYOffset     = 2
 
-LblX, EntX       = 16, 100                      # 左列标签X / 右列输入框X
-RowY0, RowStep   = 10, 28                       # 第一行Y、行距
-SepY             = RowY0 + RowStep * 3 + 6      # 虚线Y
-SepDashLen       = 4                            # 虚线段像素长度
+# 新建区，新建文章、草稿、页面
+LblX, EntX       = 16, 100                      # 左侧文字X / 右列输入框X
+RowY0, RowStep   = 10, 28                       # 第一行Y / 行间距
+SepY             = RowY0 + RowStep * 3 + 6      # 分割线Y
+SepDashLen       = 4                            # 虚线线段长度
 
-CkL_X, CkR_X     = 26, 118                      # 勾选左/右列X
-CkY1, CkY2       = SepY + 16, SepY + 40         # 勾选两行Y
+# 组合命令区，勾选运行命令
+CkY1, CkY2       = SepY + 16, SepY + 40
+CkLblL_X, CkBoxL_X = 16, 96                     # 第一列文字X / 小方框X
+CkLblR_X, CkBoxR_X = 118, 188                   # 第二列文字X / 小方框X
+CkTextYOffset    = 0                            # 勾选项文字Y轴微调
+CkBoxYOffset     = 3                            # 勾选框相对文字Y微调
 
-TailLblX         = 14
-TailY            = CkY2 + 24                    # 尾部参数行（已下移）
-TailYOffset      = 2                           # 尾部输入框Y细调
-TailEntX         = 86
-TailEntW, TailEntH = 96, 22
-InfoBtnSize      = 18
+# 运行部分，尾部参数、安装Hexo、运行命令
+TailLblX         = 14                           # 尾部参数文字X
+TailY            = CkY2 + 24                    # 尾部参数Y
+TailYOffset      = 2                            # 尾部参数输入框Y
+TailEntX         = 86                           # 尾部参数输入框X
+TailEntW, TailEntH = 96, 22                     # 尾部参数输入框宽 / 高
+InfoBtnSize      = 18                           # 尾部参数信息按钮尺寸
 
 BtnY, BtnW, BtnH = WinH - 36, 78, 26
 BtnLeftX, BtnRightX = 14, WinW - 14 - BtnW
 
-# =============== 资源路径 & 图标（PyInstaller 兼容） ===============
+# =============== 图标资源路径 ===============
 def ResourcePath(rel_path: str) -> str:
     try:
         base = sys._MEIPASS  # type: ignore[attr-defined]
@@ -68,6 +71,7 @@ def AppDir() -> str:
 BaseDir = AppDir()
 
 def SilentPopen(cmd: str, new_group: bool = False) -> subprocess.Popen:
+    """静默启动一个子进程（不显示终端窗口）。支持在 Linux/macOS 上创建新的进程组以便终止。"""
     creation_flags = 0
     startupinfo = None
     preexec_fn = None
@@ -96,9 +100,9 @@ def RunShell(cmd: str) -> tuple[int, str]:
 def PopupText(parent: Tk.Misc, title: str, content: str):
     win = Tk.Toplevel(parent)
     SetupIcon(win, "Hexo.ico")
-    LargeFont = tkfont.Font(family="Microsoft YaHei UI", size=12) 
+    LargeFont = tkfont.Font(family="Microsoft YaHei UI", size=12)
     win.title(title); win.geometry("330x430"); win.transient(parent); win.grab_set()
-    txt = scrolledtext.ScrolledText(win, wrap="word", font=LargeFont) 
+    txt = scrolledtext.ScrolledText(win, wrap="word", font=LargeFont)
     txt.pack(fill="both", expand=True, padx=10, pady=(10))
     txt.insert("1.0", content); txt.configure(state="disabled")
 
@@ -154,6 +158,10 @@ class LiveTerm:
 
 # =============== 主程序 ===============
 class HexoDashApp:
+    """
+    HexoDash 主应用类。
+    负责构建主窗口 UI、绑定控件事件、处理变量以及管理命令的构建和执行。
+    """
     def __init__(self, root: Tk.Tk):
         self.Root = root
         root.title("HexoDash"); root.geometry(f"{WinW}x{WinH}"); root.resizable(False, False)
@@ -169,18 +177,33 @@ class HexoDashApp:
         self.CleanVar  = Tk.BooleanVar(root, False)
         self.TailVar   = Tk.StringVar(root)
 
-        # UI
         self.BuildUi()
-        # 互斥：trace 监听
+
+        # 运行预览和上传仓库互斥（双向置灰）
+        self._MutualLock = False
         self.ServerVar.trace_add("write", self.OnServerChange)
         self.DeployVar.trace_add("write", self.OnDeployChange)
-        self._MutualLock = False  # 防止循环触发
 
-    # ------- UI（place 定点） -------
+    # ---------- 组合命令区 ----------
+    def PlaceRightCheck(self, text: str, var: Tk.BooleanVar, lx: int, bx: int, y: int):
+        lbl = Tk.Label(self.Root, text=text, font=FontMain)
+        lbl.place(x=lx, y=y + CkTextYOffset)
+
+        chk = Tk.Checkbutton(self.Root, variable=var, bd=0, highlightthickness=0,
+                             padx=0, pady=0, text="", width=0, takefocus=False)
+        chk.place(x=bx, y=y + CkBoxYOffset)
+
+        # 点击文字同样勾选
+        def toggle(_=None):
+            var.set(not var.get())
+        lbl.bind("<Button-1>", toggle)
+
+        return lbl, chk
+
+    # ------- UI（place定点） -------
     def BuildUi(self):
         r = self.Root
-
-        # 三行“新建*”——标签与输入框基线对齐（统一字体）
+        # 三行“新建XXX”
         Tk.Label(r, text="新建文章", font=FontMain).place(x=LblX, y=RowY0)
         Tk.Entry(r, textvariable=self.PostVar, font=FontMain, relief="solid", bd=1)\
             .place(x=EntX, y=RowY0 + EntryYOffset, width=EntryWidthPx, height=EntryHeightPx)
@@ -199,17 +222,13 @@ class HexoDashApp:
         for x in range(0, WinW-16, (SepDashLen*2)):
             dash.create_line(x, 1, x+SepDashLen, 1, fill="#888")
 
-        # 勾选（框在文字左侧：用 tk.Checkbutton）
-        self.GenBtn    = Tk.Checkbutton(r, text="生成页面", variable=self.GenVar, font=FontMain, anchor="w")
-        self.DeployBtn = Tk.Checkbutton(r, text="上传仓库", variable=self.DeployVar, font=FontMain, anchor="w")
-        self.ServerBtn = Tk.Checkbutton(r, text="运行预览", variable=self.ServerVar, font=FontMain, anchor="w")
-        self.CleanBtn  = Tk.Checkbutton(r, text="清理缓存", variable=self.CleanVar, font=FontMain, anchor="w")
-        self.GenBtn.place(x=CkL_X, y=CkY1)
-        self.DeployBtn.place(x=CkR_X, y=CkY1)
-        self.ServerBtn.place(x=CkL_X, y=CkY2)
-        self.CleanBtn.place(x=CkR_X, y=CkY2)
+        # 组合命令勾选框
+        self.GenLbl,    self.GenChk    = self.PlaceRightCheck("生成页面", self.GenVar,    CkLblL_X, CkBoxL_X, CkY1)
+        self.DeployLbl, self.DeployChk = self.PlaceRightCheck("上传仓库", self.DeployVar, CkLblR_X, CkBoxR_X, CkY1)
+        self.ServerLbl, self.ServerChk = self.PlaceRightCheck("运行预览", self.ServerVar, CkLblL_X, CkBoxL_X, CkY2)
+        self.CleanLbl,  self.CleanChk  = self.PlaceRightCheck("清理缓存", self.CleanVar,  CkLblR_X, CkBoxR_X, CkY2)
 
-        # 尾部参数（稍微下移了一些）
+        # 尾部参数
         Tk.Label(r, text="尾部参数", font=FontMain).place(x=TailLblX, y=TailY)
         Tk.Entry(r, textvariable=self.TailVar, font=FontMain, relief="solid", bd=1)\
             .place(x=TailEntX, y=TailY + TailYOffset, width=TailEntW, height=TailEntH)
@@ -226,36 +245,38 @@ class HexoDashApp:
         Tk.Button(r, text="运行", command=self.RunAll)\
             .place(x=BtnRightX, y=BtnY, width=BtnW, height=BtnH)
 
-    # ------- 互斥切换 -------
+    # ------- 互斥切换（文字勾选框置灰） -------
+    def _set_enabled(self, chk: Tk.Checkbutton, lbl: Tk.Label, enabled: bool):
+        chk.configure(state="normal" if enabled else "disabled")
+        lbl.configure(fg="black" if enabled else "#9e9e9e")
+
     def OnServerChange(self, *_):
-        if self._MutualLock: return
+        if getattr(self, "_MutualLock", False): return
         self._MutualLock = True
         try:
             if self.ServerVar.get():
-                # 勾选“运行预览”→ 禁用并取消“上传仓库”
                 self.DeployVar.set(False)
-                self.DeployBtn.configure(state="disabled")
+                self._set_enabled(self.DeployChk, self.DeployLbl, False)
             else:
-                self.DeployBtn.configure(state="normal")
+                self._set_enabled(self.DeployChk, self.DeployLbl, True)
         finally:
             self._MutualLock = False
 
     def OnDeployChange(self, *_):
-        if self._MutualLock: return
+        if getattr(self, "_MutualLock", False): return
         self._MutualLock = True
         try:
             if self.DeployVar.get():
                 self.ServerVar.set(False)
-                self.ServerBtn.configure(state="disabled")
+                self._set_enabled(self.ServerChk, self.ServerLbl, False)
             else:
-                self.ServerBtn.configure(state="normal")
+                self._set_enabled(self.ServerChk, self.ServerLbl, True)
         finally:
             self._MutualLock = False
 
     # ------- 辅助 -------
     def ShowTailInfo(self):
         info = (
-            "尾部参数大全：\n"
             "Hexo 全局参数\n"
             "--config   自定义配置文件的路径\n"
             "--cwd      指定 Hexo 网站的根目录\n"
@@ -303,7 +324,7 @@ class HexoDashApp:
         if self.ServerVar.get(): seq.append("hexo server")
         return seq
 
-    # ------- 运行 -------
+    # ------- 运行命令 -------
     def RunAll(self):
         new_seq   = self.BuildNewSeq()
         combo_seq = self.BuildComboSeq()
@@ -330,7 +351,6 @@ class HexoDashApp:
             threading.Thread(target=RunHeadThenServer, daemon=True).start()
             return
 
-        # 非 server：整串直接跑（尾参追加在最后一条）
         if len(full) == 1:
             cmd = self.AppendTail(full[0])
         else:
