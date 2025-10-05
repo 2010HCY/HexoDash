@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-HexoDash - 220x230 1.0.0-rc.1
+HexoDash - 220x230 1.0.2
 一个用于Hexo博客的GUI命令助手，
 通过GUI页面快速完成新建文章、运行生成、部署和预览等常用操作。
 免去开终端输入命令的麻烦。
@@ -17,13 +17,13 @@ from tkinter import ttk
 
 # =============== 可调常量（布局的像素/字体调整） ===============
 WinW, WinH       = 220, 230                     # 主窗口尺寸
-FontMain         = ("Adobe Song Std L", 11)     # 标签、输入框字体（你保持的字体）
-EntryWidthPx     = 92
-EntryHeightPx    = 22
-EntryYOffset     = 2
+FontMain         = ("Adobe Song Std L", 11)     # 标签、输入框字体
+EntryWidthPx     = 92                           # 输入框宽
+EntryHeightPx    = 22                           # 输入框高
+EntryYOffset     = 0                            # 输入框Y微调（垂直居中）
 
 # 输入框防粘边
-EntryInnerPadding = (3, 1, 3, 1)                # (左,上,右,下) 内边距，改这里就行
+EntryInnerPadding = (3, 1, 3, 1)                # (左,上,右,下)
 
 # 新建区，新建文章、草稿、页面
 LblX, EntX       = 16, 100                      # 左侧文字X / 右列输入框X
@@ -36,7 +36,7 @@ CkY1, CkY2       = SepY + 16, SepY + 40
 CkLblL_X, CkBoxL_X = 16, 96                     # 第一列文字X / 小方框X
 CkLblR_X, CkBoxR_X = 118, 188                   # 第二列文字X / 小方框X
 CkTextYOffset    = 0                            # 勾选项文字Y轴微调
-CkBoxYOffset     = 3                            # 勾选框相对文字Y微调
+CkBoxYOffset     = 1                            # 勾选框相对文字Y微调
 
 # 运行部分，尾部参数、安装Hexo、运行命令
 TailLblX         = 14                           # 尾部参数文字X
@@ -46,15 +46,15 @@ TailEntX         = 86                           # 尾部参数输入框X
 TailEntW, TailEntH = 96, 22                     # 尾部参数输入框宽 / 高
 InfoBtnSize      = 18                           # 尾部参数信息按钮尺寸
 
-BtnY, BtnW, BtnH = WinH - 36, 78, 26
-BtnLeftX, BtnRightX = 14, WinW - 14 - BtnW
+BtnY, BtnW, BtnH = WinH - 36, 78, 26            # 底部按钮Y/宽/高
+BtnLeftX, BtnRightX = 14, WinW - 14 - BtnW      # 左右按钮X
 
-# 终端窗口
+# 终端窗口（黑底 & 保留颜色码渲染）
 TermFontFamily     = "Lucida Console"           # 终端字体
 TermFontSize       = 9                          # 终端字号
 TermBg             = "#000000"                  # 终端背景（黑色）
 TermDefaultFg      = "#E6E6E6"                  # 默认前景（浅灰）
-TermNew_W,   TermNew_H   = 220, 50              # 新建功能终端
+TermNew_W,   TermNew_H   = 220, 85              # 新建功能终端
 TermCombo_W, TermCombo_H = 400, 250             # 组合命令终端
 TermLive_W,  TermLive_H  = 400, 250             # 实时终端
 
@@ -97,18 +97,27 @@ def SilentPopen(cmd: str, new_group: bool = False) -> subprocess.Popen:
     else:
         if new_group:
             preexec_fn = os.setsid
-    enc = locale.getpreferredencoding(False) or "utf-8"
     return subprocess.Popen(
         cmd, shell=True, cwd=BaseDir,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, encoding=enc, errors="replace",
         startupinfo=startupinfo, creationflags=creation_flags, preexec_fn=preexec_fn
     )
+
+def _decode_best(b: bytes) -> str:
+    """按常见编码顺序尝试解码，修复中文乱码；不丢颜色码。"""
+    if not isinstance(b, (bytes, bytearray)):
+        return str(b)
+    for enc in ("utf-8", "utf-8-sig", "gb18030", "gbk", (locale.getpreferredencoding(False) or "utf-8")):
+        try:
+            return b.decode(enc)
+        except Exception:
+            pass
+    return b.decode("utf-8", errors="replace")
 
 def RunShell(cmd: str) -> tuple[int, str]:
     p = SilentPopen(cmd)
     out, _ = p.communicate()
-    return p.returncode, out
+    return p.returncode, _decode_best(out or b"")
 
 # =============== ANSI颜色渲染 ===============
 _ansi_pat = re.compile(r'\x1b\[([0-9;]*)m')
@@ -178,6 +187,7 @@ def insert_ansi(txt: Tk.Text, s: str, st: dict):
         txt.insert("end", seg, tuple(tags))
 
 def terminal_popup(parent: Tk.Misc, title: str, content: str, w: int, h: int):
+    """黑底、支持颜色码的结果弹窗（尺寸可传入）。"""
     win = Tk.Toplevel(parent)
     SetupIcon(win, "Hexo.ico")
     win.title(title); win.geometry(f"{w}x{h}"); win.transient(parent); win.grab_set()
@@ -198,12 +208,42 @@ def PopupText(parent: Tk.Misc, title: str, content: str):
     txt.pack(fill="both", expand=True, padx=10, pady=(10))
     txt.insert("1.0", content); txt.configure(state="disabled")
 
+# =============== Tooltip ===============
+class Tooltip:
+    def __init__(self, widget: Tk.Misc, text: str):
+        self.widget = widget
+        self.text = text
+        self.tip = None
+        widget.bind("<Enter>", self.show)
+        widget.bind("<Leave>", self.hide)
+        widget.bind("<Button-1>", self.hide)
+    def show(self, _=None):
+        if self.tip is not None: return
+        x = self.widget.winfo_rootx() + self.widget.winfo_width()//2
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 10
+        self.tip = Tk.Toplevel(self.widget)
+        self.tip.wm_overrideredirect(True)
+        self.tip.attributes("-topmost", True)
+        lbl = Tk.Label(self.tip, text=self.text, bg="#111", fg="#fff",
+                       padx=8, pady=5, relief="solid", bd=1,
+                       font=("Adobe Song Std L", 9))
+        lbl.pack()
+        self.tip.geometry(f"+{x}+{y}")
+    def hide(self, _=None):
+        if self.tip is not None:
+            try: self.tip.destroy()
+            except Exception: pass
+            self.tip = None
+
 # =============== 实时终端 ===============
 class LiveTerm:
-    """实时终端窗口：滚动显示输出；Ctrl+C/关闭结束；结束后回调 OnFinish(rc, out)"""
+    """实时终端窗口滚动显示输出；Ctrl+C/关闭结束后回调 OnFinish(rc, out)
+       备注：用户主动关闭（点X或“停止/Ctrl+C”）不弹出任何完成/错误提示。"""
     def __init__(self, root: Tk.Tk, cmd: str, title: str, on_finish):
         self.Root, self.Cmd, self.OnFinish = root, cmd, on_finish
         self.Buf = []
+        self.Aborted = False  # 主动终止标记
+
         self.Win = Tk.Toplevel(root)
         self.Win.title(title); self.Win.geometry(f"{TermLive_W}x{TermLive_H}"); self.Win.transient(root)
         self.Txt = scrolledtext.ScrolledText(self.Win, wrap="word")
@@ -215,29 +255,42 @@ class LiveTerm:
         Tk.Button(bar, text="复制全部", command=self.CopyAll).pack(side="left", padx=(8,0))
         self.Win.bind("<Control-c>", lambda e: self.Stop())
         self.Win.protocol("WM_DELETE_WINDOW", self.Stop)
+
         self.Proc = SilentPopen(self.Cmd, new_group=True)
         self.State = {"fg": "fg_default", "bg": "bg_default", "bold": False, "ul": False}
         threading.Thread(target=self.ReadLoop, daemon=True).start()
         threading.Thread(target=self.WaitLoop, daemon=True).start()
 
     def Append(self, s: str):
+        if isinstance(s, (bytes, bytearray)):
+            s = _decode_best(s)
         insert_ansi(self.Txt, s, self.State)
         self.Buf.append(s)
         self.Txt.see("end")
+
     def ReadLoop(self):
         try:
-            for line in self.Proc.stdout:
+            while True:
+                if self.Proc.stdout is None: break
+                line = self.Proc.stdout.readline()
+                if not line: break
                 self.Root.after(0, self.Append, line)
         except Exception as e:
             self.Root.after(0, self.Append, f"\n[读取输出异常] {e}\n")
+
     def WaitLoop(self):
-        rc = self.Proc.wait(); out = "".join(self.Buf)
+        rc = self.Proc.wait()
+        out_bytes = b"".join([x.encode("utf-8", "replace") if isinstance(x, str) else x for x in []])  # 占位（已在读循环累计到 Buf）
+        out = "".join(self.Buf)
         def Done():
             try: self.Win.destroy()
             except Exception: pass
-            self.OnFinish(rc, out)
+            if not self.Aborted:
+                self.OnFinish(rc, out)
         self.Root.after(0, Done)
+
     def Stop(self):
+        self.Aborted = True  # 主动终止
         try:
             if os.name != "nt":
                 try: os.killpg(self.Proc.pid, signal.SIGINT)
@@ -251,6 +304,7 @@ class LiveTerm:
                                    creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
                 except Exception: pass
         except Exception: pass
+
     def CopyAll(self):
         txt = "".join(self.Buf)
         self.Root.clipboard_clear(); self.Root.clipboard_append(txt)
@@ -341,13 +395,11 @@ class HexoDashApp:
         ttk.Entry(r, textvariable=self.TailVar, font=FontMain, style="Dash.TEntry")\
             .place(x=TailEntX, y=TailY + TailYOffset, width=TailEntW, height=TailEntH)
 
-        # 信息按钮（保持你的画布写法）
-        dot = Tk.Canvas(r, width=InfoBtnSize, height=InfoBtnSize, highlightthickness=0, cursor="hand2")
-        dot.place(x=TailEntX + TailEntW + 4, y=TailY + 3)
-        r2 = InfoBtnSize - 2
-        dot.create_oval(1,1,r2,r2, outline="#888", fill="#e9e9e9")
-        dot.create_text(r2//2, r2//2, text="i", font=("Arial", 10, "bold"))
-        dot.bind("<Button-1>", lambda e: self.ShowTailInfo())
+        # Tooltip
+        info = Tk.Label(r, text="ⓘ", font=("Segoe UI Symbol", 14), fg="#6b7280", cursor="hand2")
+        info.place(x=TailEntX + TailEntW + 6, y=TailY + 1, width=InfoBtnSize, height=InfoBtnSize)
+        Tooltip(info, "尾部参数大全")
+        info.bind("<Button-1>", lambda e: self.ShowTailInfo())
 
         # 底部按钮
         Tk.Button(r, text="安装Hexo", command=self.InstallHexo, font=FontMain)\
@@ -441,7 +493,7 @@ class HexoDashApp:
         if self.ServerVar.get(): seq.append("hexo server")
         return seq
 
-    # ------- 新建回车运行 -------
+    # ------- 回车运行 -------
     def RunNewOnly(self):
         new_seq = self.BuildNewSeq()
         if not new_seq:
