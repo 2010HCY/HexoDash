@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-HexoDash - 220x230 1.0.2
+HexoDash - 220x230 1.0.3
 一个用于Hexo博客的GUI命令助手，
 通过GUI页面快速完成新建文章、运行生成、部署和预览等常用操作。
 免去开终端输入命令的麻烦。
 
 附带尾部参数大全表。
-2025.10.03 19:29:03
+2025.10.07 21:02:08
 """
 
 import os, sys, threading, subprocess, signal, tempfile, shutil, re, locale
@@ -14,6 +14,7 @@ import tkinter as Tk
 from tkinter import messagebox, scrolledtext
 from tkinter import font as tkfont
 from tkinter import ttk
+import time
 
 # =============== 可调常量（布局的像素/字体调整） ===============
 WinW, WinH       = 220, 230                     # 主窗口尺寸
@@ -104,7 +105,7 @@ def SilentPopen(cmd: str, new_group: bool = False) -> subprocess.Popen:
     )
 
 def _decode_best(b: bytes) -> str:
-    """按常见编码顺序尝试解码，修复中文乱码；不丢颜色码。"""
+    """按常见编码顺序尝试解码，修复中文乱码"""
     if not isinstance(b, (bytes, bytearray)):
         return str(b)
     for enc in ("utf-8", "utf-8-sig", "gb18030", "gbk", (locale.getpreferredencoding(False) or "utf-8")):
@@ -245,6 +246,7 @@ class LiveTerm:
         self.Aborted = False  # 主动终止标记
 
         self.Win = Tk.Toplevel(root)
+        SetupIcon(self.Win, "Hexo.ico")
         self.Win.title(title); self.Win.geometry(f"{TermLive_W}x{TermLive_H}"); self.Win.transient(root)
         self.Txt = scrolledtext.ScrolledText(self.Win, wrap="word")
         self.Txt.pack(fill="both", expand=True, padx=10, pady=(10,0))
@@ -255,6 +257,10 @@ class LiveTerm:
         Tk.Button(bar, text="复制全部", command=self.CopyAll).pack(side="left", padx=(8,0))
         self.Win.bind("<Control-c>", lambda e: self.Stop())
         self.Win.protocol("WM_DELETE_WINDOW", self.Stop)
+
+        self.Win.update_idletasks()
+        self.State = {"fg": "fg_default", "bg": "bg_default", "bold": False, "ul": False}
+        self.Append("\x1b[90m$ " + self.Cmd + "\x1b[0m\n")
 
         self.Proc = SilentPopen(self.Cmd, new_group=True)
         self.State = {"fg": "fg_default", "bg": "bg_default", "bold": False, "ul": False}
@@ -293,17 +299,44 @@ class LiveTerm:
         self.Aborted = True  # 主动终止
         try:
             if os.name != "nt":
-                try: os.killpg(self.Proc.pid, signal.SIGINT)
-                except Exception: self.Proc.terminate()
-            else:
-                try: self.Proc.terminate()
-                except Exception: pass
                 try:
-                    subprocess.run(f'taskkill /PID {self.Proc.pid} /T /F', shell=True, cwd=BaseDir,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                   creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
-                except Exception: pass
-        except Exception: pass
+                    os.killpg(self.Proc.pid, signal.SIGINT)
+                except Exception:
+                    try: self.Proc.terminate()
+                    except Exception: pass
+
+                for _ in range(40):  # ~2s
+                    if self.Proc.poll() is not None:
+                        break
+                    time.sleep(0.05)
+
+                if self.Proc.poll() is None:
+                    try: os.killpg(self.Proc.pid, signal.SIGTERM)
+                    except Exception: pass
+                    for _ in range(20):  # ~1s
+                        if self.Proc.poll() is not None:
+                            break
+                        time.sleep(0.05)
+
+                if self.Proc.poll() is None:
+                    try: os.killpg(self.Proc.pid, signal.SIGKILL)
+                    except Exception: pass
+            else:
+                try:
+                    subprocess.run(
+                        f'taskkill /PID {self.Proc.pid} /T /F',
+                        shell=True, cwd=BaseDir,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    )
+                except Exception:
+                    pass
+                try:
+                    self.Proc.terminate()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def CopyAll(self):
         txt = "".join(self.Buf)
@@ -376,7 +409,7 @@ class HexoDashApp:
 
         for child in r.place_slaves():
             if isinstance(child, ttk.Entry):
-                child.bind("<Return>", lambda e: self.RunNewOnly())
+                child.bind("<Return>", lambda e: self.RunAll())
 
         # 虚线
         dash = Tk.Canvas(r, width=WinW-16, height=2, highlightthickness=0)
@@ -466,13 +499,12 @@ class HexoDashApp:
         PopupText(self.Root, "尾部参数大全", info)
 
     def AppendTailEach(self, seq: list[str]) -> list[str]:
-        """给序列中每条命令都附加尾部参数（用于“新建”场景）。"""
         tail = self.TailVar.get().strip()
         if not tail: return seq
         return [f"{cmd} {tail}" for cmd in seq]
 
     def AppendTail(self, cmd: str) -> str:
-        """仅给最后一条加尾巴（组合命令时保持你原有逻辑）"""
+        """仅给最后一条加尾巴"""
         tail = self.TailVar.get().strip()
         return f"{cmd} {tail}" if tail else cmd
 
@@ -493,16 +525,36 @@ class HexoDashApp:
         if self.ServerVar.get(): seq.append("hexo server")
         return seq
 
+    def _DisplayName(self, cmd: str) -> str:
+        s = cmd.strip().lower()
+        if s.startswith("hexo server"):   return "运行预览"
+        if s.startswith("hexo clean"):    return "清理缓存"
+        if s.startswith("hexo generate"): return "生成页面"
+        if s.startswith("hexo deploy"):   return "上传仓库"
+        return "组合命令"
+
+    def _NewTitle(self, new_seq: list[str]) -> str:
+        if not new_seq: return "新建"
+        if len(new_seq) > 1: return "新建（多项）"
+        m = re.search(r'hexo\s+new(?:\s+(draft|page))?\s+"([^"]+)"', new_seq[0], re.I)
+        if not m: return "新建"
+        tp, name = (m.group(1) or "").lower(), m.group(2)
+        if tp == "draft": base = "新建草稿"
+        elif tp == "page": base = "新建页面"
+        else: base = "新建文章"
+        return f'{base}：{name}'
+
     # ------- 回车运行 -------
-    def RunNewOnly(self):
-        new_seq = self.BuildNewSeq()
-        if not new_seq:
-            return
-        cmds = " && ".join(self.AppendTailEach(new_seq))
-        def Task():
-            code, out = RunShell(cmds)
-            self.Root.after(0, lambda: terminal_popup(self.Root, "完成" if code == 0 else "错误", out, TermNew_W, TermNew_H))
-        threading.Thread(target=Task, daemon=True).start()
+    def _NewTitle(self, new_seq: list[str]) -> str:
+        if not new_seq: return "新建"
+        if len(new_seq) > 1: return "新建（多项）"
+        m = re.search(r'hexo\s+new(?:\s+(draft|page))?\s+"([^"]+)"', new_seq[0], re.I)
+        if not m: return "新建"
+        tp, name = (m.group(1) or "").lower(), m.group(2)
+        if tp == "draft": base = "新建草稿"
+        elif tp == "page": base = "新建页面"
+        else: base = "新建文章"
+        return f'{base}：{name}'
 
     # ------- 运行按钮 -------
     def RunAll(self):
@@ -512,50 +564,40 @@ class HexoDashApp:
             messagebox.showwarning("提示", "请先输入要新建的名称或勾选组合操作。", parent=self.Root)
             return
 
+        def OnFinish(rc, out):
+            terminal_popup(self.Root, "完成" if rc == 0 else "错误", out, TermCombo_W, TermCombo_H)
+
+        # 仅新建
         if new_seq and not combo_seq:
-            cmds = " && ".join(self.AppendTailEach(new_seq))
-            def TaskNew():
-                code, out = RunShell(cmds)
-                self.Root.after(0, lambda: terminal_popup(self.Root, "完成" if code == 0 else "错误", out, TermNew_W, TermNew_H))
-            threading.Thread(target=TaskNew, daemon=True).start()
+            cmd = " && ".join(self.AppendTailEach(new_seq))
+            title = self._NewTitle(new_seq)
+            LiveTerm(self.Root, cmd, title, OnFinish)
             return
 
+        # 组合
         full = new_seq + combo_seq
         is_server_last = (len(full) > 0 and full[-1].startswith("hexo server"))
 
         if is_server_last:
             head = full[:-1]
             server_cmd = self.AppendTail(full[-1])
-            head_cmd = " && ".join(head) if head else None
-
-            def RunHeadThenServer():
-                if head_cmd:
-                    code, out = RunShell(head_cmd)
-                    if code != 0:
-                        self.Root.after(0, lambda: terminal_popup(self.Root, "错误", out, TermCombo_W, TermCombo_H))
-                        return
-                def OnFinish(rc, out):
-                    terminal_popup(self.Root, "完成" if rc == 0 else "错误", out, TermCombo_W, TermCombo_H)
-                LiveTerm(self.Root, server_cmd, "预览终端（hexo server）", OnFinish)
-            threading.Thread(target=RunHeadThenServer, daemon=True).start()
+            full_cmd = " && ".join(head + [server_cmd]) if head else server_cmd
+            title = self._DisplayName(full[-1])
+            LiveTerm(self.Root, full_cmd, title, OnFinish)
             return
 
         if len(full) == 1:
             cmd = self.AppendTail(full[0])
         else:
-            last = self.AppendTail(full[-1])
-            cmd = " && ".join(full[:-1] + [last])
-
-        def TaskCombo():
-            code, out = RunShell(cmd)
-            self.Root.after(0, lambda: terminal_popup(self.Root, "完成" if code == 0 else "错误", out, TermCombo_W, TermCombo_H))
-        threading.Thread(target=TaskCombo, daemon=True).start()
+            cmd = " && ".join(full[:-1] + [self.AppendTail(full[-1])])
+        title = self._DisplayName(full[-1])
+        LiveTerm(self.Root, cmd, title, OnFinish)
 
     def InstallHexo(self):
         chain = "npm install hexo-cli -g && hexo init blog && cd blog && npm install"
         def OnFinish(rc, out):
             terminal_popup(self.Root, "完成" if rc == 0 else "错误", out, TermCombo_W, TermCombo_H)
-        LiveTerm(self.Root, chain, "安装 Hexo（实时输出）", OnFinish)
+        LiveTerm(self.Root, chain, "安装 Hexo", OnFinish)
 
 # 入口
 def Main():
